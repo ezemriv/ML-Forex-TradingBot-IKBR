@@ -84,7 +84,7 @@ class PeakValleyStrategy:
         total_trades = self.df['Signal'].diff().fillna(0).abs().sum()
 
         print(f"Total Buy and Hold Return: {total_bh_return:.2f}%")
-        print(f"Total Strategy Return: {total_strategy_return:.2f}%")
+        print(f"Total Strategy Return: {total_strategy_return:.2f}% ({(total_strategy_return/total_bh_return)/1000:.2f} 1000s Fold B&H)")
         print(f"Total Number of Trades: {total_trades}")
         total_trading_days = self.df['Close'].count()
         trading_weeks = total_trading_days / 5
@@ -161,7 +161,7 @@ def plot_price_signals(df, start_date=None, end_date=None, signal_col='Signal'):
         plot_title = f"Stock Price and Signals from {start_date} to {end_date}"
     else:
         df_period = df  # Plot the entire DataFrame
-        plot_title = "Stock Price and Signals (Full Period)"
+        plot_title = "Stock Price and Signals"
 
     # Plot the close price
     plt.figure(figsize=(12, 6))
