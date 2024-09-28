@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+
 from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
 from statsmodels.tsa.stattools import adfuller
 from scipy.stats import skew, kurtosis
@@ -194,3 +195,142 @@ class FinancialInstrumentAnalyzer:
         self.compute_correlations()
         for ticker in self.tickers:
             self.plot_acf_pacf(ticker)
+
+class TradingHourAnalyzer:
+    def __init__(self, df, timezone='America/New_York'):
+        """
+        Initialize the analyzer with a DataFrame containing bid and ask prices.
+
+        Parameters:
+        - df: DataFrame with datetime index and 'bid' and 'ask' columns.
+        - timezone: Timezone for converting datetime index (default is 'America/New_York').
+        """
+        self.df = df.copy()
+        self.timezone = timezone
+        self._prepare_data()
+
+    def _prepare_data(self):
+        """
+        Prepare the data by calculating mid prices, spreads, and converting timezones.
+        """
+        # Ensure the index is datetime and set timezone if not already
+        if not pd.api.types.is_datetime64_any_dtype(self.df.index):
+            self.df.index = pd.to_datetime(self.df.index)
+        if self.df.index.tz is None:
+            self.df.index = self.df.index.tz_localize('UTC')
+
+        # Calculate mid price and spread
+        self.df["mid"] = (self.df["bid"] + self.df["ask"]) / 2
+        self.df["spread"] = self.df["ask"] - self.df["bid"]
+
+        # Convert to specified timezone
+        self.df.index = self.df.index.tz_convert(self.timezone)
+        self.df["hour"] = self.df.index.hour
+
+        # Compute absolute price change
+        self.df["price_change_abs"] = self.df["mid"].diff().abs()
+        self.df.dropna(inplace=True)
+
+        # Calculate cover cost
+        self.df["cover_cost"] = self.df["price_change_abs"] > self.df["spread"]
+
+    def detect_busy_trading_hours(self, threshold=0.55):
+        """
+        Analyze and plot features to detect busy trading hours.
+
+        Parameters:
+        - threshold: Threshold for cover cost percentage (default is 0.55).
+        """
+        # Calculate by-hour mean for volume, spread, and price change
+        features = ["volume", "spread", "price_change_abs"]
+        available_features = [f for f in features if f in self.df.columns]
+        by_hour = self.df.groupby("hour")[available_features].mean()
+
+        # Normalize features for overlapping histogram
+        normalized_features = {}
+        for feature in available_features:
+            feature_min = by_hour[feature].min()
+            feature_max = by_hour[feature].max()
+            if feature_max - feature_min != 0:
+                normalized = (by_hour[feature] - feature_min) / (feature_max - feature_min)
+            else:
+                normalized = by_hour[feature] - feature_min
+            normalized_features[feature + "_norm"] = normalized
+        normalized_df = pd.DataFrame(normalized_features)
+
+        # Plot overlapping histogram
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+        normalized_df.plot(kind="bar", ax=axes[0], stacked=True, alpha=0.7)
+        axes[0].set_xlabel("Hour")
+        axes[0].set_ylabel("Normalized Features")
+        axes[0].set_title("Overlapping Histogram of Volume, Spread, and Price Change")
+
+        # Cover cost histogram
+        cover_cost_by_hour = self.df.groupby("hour")["cover_cost"].mean()
+        cover_cost_by_hour.plot(kind="bar", ax=axes[1], color="orange")
+        axes[1].axhline(y=threshold, color='red', linestyle='--', linewidth=2)
+        axes[1].set_xlabel("Hour")
+        axes[1].set_ylabel("Cover Cost Percentage")
+        axes[1].set_title(f"Cover Cost Histogram with {round(threshold*100)}% Threshold")
+
+        plt.tight_layout()
+        plt.show()
+
+    def hours_granularity(self, freq_list=None, threshold=0.6):
+        """
+        Analyze the best granularity for trading by resampling data at different frequencies.
+
+        Parameters:
+        - freq_list: List of frequencies to resample the data (e.g., ['10min', '30min', '1H']).
+                      If None, default frequencies will be used.
+        - threshold: Threshold for cover cost percentage (default is 0.6).
+        """
+        if freq_list is None:
+            freq_list = ['10min', '20min', '30min', '1H', '2H', '4H', '6H']
+
+        num_plots = min(len(freq_list), 8)  # Limit to 8 subplots
+        fig, axes = plt.subplots(nrows=2, ncols=4, figsize=(20, 10))
+        axes = axes.flatten()
+
+        for i, freq in enumerate(freq_list[:8]):
+            # Resample data at the current frequency
+            resampled_df = self.df.resample(freq).last().dropna()
+            resampled_df["hour"] = resampled_df.index.hour
+            resampled_df["price_change_abs"] = resampled_df["mid"].diff().abs()
+            resampled_df["cover_cost"] = resampled_df["price_change_abs"] > resampled_df["spread"]
+
+            # Group by hour and calculate mean of cover cost
+            cover_cost_by_hour = resampled_df.groupby("hour")["cover_cost"].mean()
+
+            # Calculate max cover cost percentage
+            max_cover_cost = cover_cost_by_hour.max()
+
+            # Plot cover cost percentage by hour for the current frequency
+            cover_cost_by_hour.plot(kind="bar", ax=axes[i], fontsize=10, color=self._get_color(i))
+
+            # Customize plot appearance
+            axes[i].set_xlabel("Hour", fontsize=10)
+            axes[i].set_ylabel("Cover Cost", fontsize=10)
+            axes[i].set_title(f"Granularity: {freq}", fontsize=12)
+            axes[i].axhline(y=threshold, color="red", linestyle="--", linewidth=2)
+            axes[i].set_ylim(0, 1)
+            axes[i].set_yticks(np.linspace(0, 1, 11))
+
+            # Add max cover cost percentage as a label
+            axes[i].text(0.05, 0.95, f"Max: {max_cover_cost:.2%}",
+                         transform=axes[i].transAxes, fontsize=10,
+                         verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+        # Remove any unused subplots
+        for j in range(num_plots, len(axes)):
+            fig.delaxes(axes[j])
+
+        plt.tight_layout()
+        plt.show()
+
+    def _get_color(self, index):
+        """
+        Helper function to get consistent colors.
+        """
+        color_palette = sns.color_palette('tab10', 8)
+        return color_palette[index % 8]
