@@ -142,7 +142,7 @@ class PeakValleyStrategy:
         self.df.loc[self.df['Valley'].notnull(), 'train_target'] = 1   # Buy signal at valleys
         self.df.loc[self.df['Peak'].notnull(), 'train_target'] = -1    # Sell signal at peaks
 
-        return self.df[['Close', 'Signal', 'Log_Returns', 'Peak', 'Valley', 'train_target']]
+        return self.df
 
 
 def plot_price_signals(df, start_date=None, end_date=None, signal_col='Signal'):
